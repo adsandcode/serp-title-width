@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -44,9 +44,21 @@ try {
   }
   const j = spawnSync(process.execPath, [cli, "--json", "--titles", SAMPLE], { encoding: "utf8" });
   const parsed = JSON.parse(j.stdout);
-  const ok = parsed.results[0].title === SAMPLE && parsed.results[0].px === 564.6;
+  const ok = parsed.results[0].title === SAMPLE && parsed.results[0].px === 564.7;
   if (!ok) failures++;
   console.log(`  [${ok ? "ok" : "FAIL"}] --json output parses and keeps the title intact through the pipe`);
+
+  // [fix 4] A site has many index.html files; the report must say which one.
+  const site = join(dir, "site");
+  mkdirSync(join(site, "guides"), { recursive: true });
+  writeFileSync(join(site, "index.html"), `<title>${SAMPLE}</title>`);
+  writeFileSync(join(site, "guides", "index.html"), `<title>${CUT}</title>`);
+  const s = spawnSync(process.execPath, [cli, site], { encoding: "utf8" });
+  const want = join(site, "guides", "index.html");
+  const pathOk = s.status === 1 && s.stdout.includes(`[FAIL] ${want}`);
+  if (!pathOk) failures++;
+  console.log(`  [${pathOk ? "ok" : "FAIL"}] [fix 4] a failing page is named by its path under the scanned folder, not just "index.html"`);
+  if (!pathOk) console.log("        " + s.stdout.split("\n").filter((l) => l.startsWith("[")).join(" | "));
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

@@ -25,4 +25,6 @@ jobs:
       - run: node scripts/smoke.mjs
       # Run the CLI as a separate process and check exit codes 0 / 1 / 2.
       - run: node scripts/cli-exit-codes.mjs
+      # Directory scanning: skipped folders, the file cap, unreadable folders.
+      - run: node scripts/files-test.mjs
       - run: node scripts/check-publish-ready.mjs

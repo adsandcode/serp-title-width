@@ -50,8 +50,9 @@
     "selftest": "node dist/selftest.js",
     "smoke": "node scripts/smoke.mjs",
     "test:cli": "node scripts/cli-exit-codes.mjs",
-    "prepublishOnly": "npm run build && npm run selftest && node scripts/smoke.mjs && node scripts/cli-exit-codes.mjs && node scripts/check-publish-ready.mjs",
-    "start": "node dist/index.js"
+    "prepublishOnly": "npm run build && npm run selftest && node scripts/smoke.mjs && node scripts/cli-exit-codes.mjs && node scripts/files-test.mjs && node scripts/check-publish-ready.mjs",
+    "start": "node dist/index.js",
+    "test:files": "node scripts/files-test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

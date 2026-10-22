@@ -5,7 +5,9 @@
  * reported but does not change the exit code.
  */
 
-import { EDGE, FIRST_LINE, HARD, MODEL, SAFE, px, tier, units, type Tier } from "./width.js";
+import {
+  EDGE, FIRST_LINE, HARD, MODEL, SAFE, px, tier, units, type ModelOptions, type Tier,
+} from "./width.js";
 
 export * from "./width.js";
 
@@ -30,6 +32,24 @@ export interface Verdict {
   warns: Finding[];
 }
 
+/**
+ * Rule switches. The defaults are this package's rules; LEGACY_RULES
+ * reproduces the unpublished reference implementation for parity checks.
+ */
+export interface RuleOptions extends ModelOptions {
+  /** Treat a trailing "：phrase" as a boilerplate tail (reference behaviour). */
+  colonTail: boolean;
+  /** Separators over the limit only warn while the title is within the safe line. */
+  separatorTier: boolean;
+}
+
+export const DEFAULT_RULES: RuleOptions = Object.freeze({
+  asciiTable: true, graphemes: true, colonTail: false, separatorTier: true,
+});
+export const LEGACY_RULES: RuleOptions = Object.freeze({
+  asciiTable: false, graphemes: false, colonTail: true, separatorTier: false,
+});
+
 /** The ideographic comma and the full-width comma. Each is a point where Google can cut a title. */
 export const SEPARATORS = ["、", "，"] as const;
 export const MAX_SEPARATORS = 2;
@@ -41,9 +61,16 @@ export const MAX_SHARED_TAIL = 2;
 /** A 2-4 ideograph run repeated this many times is keyword stuffing. */
 export const STUFFING_REPEATS = 3;
 
-const TAIL_RE = new RegExp(`[，、：]([^，、：]{${TAIL_MIN},})$`, "u");
+/**
+ * The boilerplate tail is the text after the last 、 or ，. A colon is not a
+ * tail separator: Google's title link documentation suggests putting the site
+ * name at the start or end of the title, separated by a hyphen, colon or pipe,
+ * so "...：Site Name" on every page is the recommended pattern, not boilerplate.
+ */
+const TAIL_RE = new RegExp(`[，、]([^，、]{${TAIL_MIN},})$`, "u");
+const LEGACY_TAIL_RE = new RegExp(`[，、：]([^，、：]{${TAIL_MIN},})$`, "u");
 const KEYWORD_ZONE_END = /[？：、，]/u;
-const IDEOGRAPH_RUN = /[\u4E00-\u9FFF]{2,4}/gu;
+const IDEOGRAPH_RUN = new RegExp(`[${String.fromCodePoint(0x4e00)}-${String.fromCodePoint(0x9fff)}]{2,4}`, "gu");
 
 /**
  * Whitespace as Python's str.isspace() defines it. Used for the empty-title
@@ -73,19 +100,19 @@ const f0 = (n: number) => n.toFixed(0);
 const f1 = (n: number) => n.toFixed(1);
 
 /**
- * The trailing phrase after the last 、，or ：, when it is at least TAIL_MIN
+ * The trailing phrase after the last 、 or ，, when it is at least TAIL_MIN
  * characters long. Used to find tails repeated across many titles.
  */
-export function tailOf(title: string): string | null {
-  const m = TAIL_RE.exec(title);
+export function tailOf(title: string, o: RuleOptions = DEFAULT_RULES): string | null {
+  const m = (o.colonTail ? LEGACY_TAIL_RE : TAIL_RE).exec(title);
   return m ? m[1] : null;
 }
 
 /** Tails shared by more than MAX_SHARED_TAIL titles in the set, with their counts. */
-export function boilerplateTails(titles: readonly string[]): Map<string, number> {
+export function boilerplateTails(titles: readonly string[], o: RuleOptions = DEFAULT_RULES): Map<string, number> {
   const counts = new Map<string, number>();
   for (const t of titles) {
-    const tail = tailOf(t);
+    const tail = tailOf(t, o);
     if (tail) counts.set(tail, (counts.get(tail) ?? 0) + 1);
   }
   const out = new Map<string, number>();
@@ -97,34 +124,41 @@ export function boilerplateTails(titles: readonly string[]): Map<string, number>
  * Check one title. `boiler` is the result of boilerplateTails() over the whole
  * set the title belongs to; pass an empty map to check a title on its own.
  */
-export function checkOne(title: string, boiler: ReadonlyMap<string, number> = new Map()): Verdict {
-  const w = px(title);
+export function checkOne(
+  title: string, boiler: ReadonlyMap<string, number> = new Map(), o: RuleOptions = DEFAULT_RULES,
+): Verdict {
+  const w = px(title, o);
+  const u = units(title, o);
   const fails: Finding[] = [];
   const warns: Finding[] = [];
 
   if (w > HARD) {
     fails.push({
       rule: "length_cut",
-      message: `Cut: ${f0(w)}px (${f1(units(title))} full-width characters), ${f0(w - HARD)}px over the ${f0(HARD)}px line. Desktop results will truncate it.`,
+      message: `Cut: ${f0(w)}px (${f1(u)} full-width characters), ${f0(w - HARD)}px over the ${f0(HARD)}px line. Desktop results will truncate it.`,
     });
   } else if (w > EDGE) {
     fails.push({
       rule: "length_edge",
-      message: `Too long: ${f0(w)}px (${f1(units(title))} full-width characters), inside the ${f0(EDGE)}-${f0(HARD)}px zone where desktop truncation starts.`,
+      message: `Too long: ${f0(w)}px (${f1(u)} full-width characters), inside the ${f0(EDGE)}-${f0(HARD)}px zone where desktop truncation starts.`,
     });
   } else if (w > SAFE) {
     warns.push({
       rule: "length_long",
-      message: `Long: ${f0(w)}px (${f1(units(title))} full-width characters), over the ${f0(SAFE)}px safe line.`,
+      message: `Long: ${f0(w)}px (${f1(u)} full-width characters), over the ${f0(SAFE)}px safe line.`,
     });
   }
 
+  // Separators matter when Google has to shorten the title. Within the safe
+  // line it rarely does, so there they only warn.
   const seps = SEPARATORS.reduce((n, s) => n + count(title, s), 0);
   if (seps > MAX_SEPARATORS) {
-    fails.push({
-      rule: "separators",
-      message: `${seps} separators (、 or ，), limit ${MAX_SEPARATORS}. Each one is a place where Google can cut the title.`,
-    });
+    const base = `${seps} separators (、 or ，), limit ${MAX_SEPARATORS}. Each one is a place where Google can cut the title`;
+    if (o.separatorTier && w <= SAFE) {
+      warns.push({ rule: "separators", message: `${base}; the title is within the ${f0(SAFE)}px safe line, so this is a warning.` });
+    } else {
+      fails.push({ rule: "separators", message: `${base}.` });
+    }
   }
 
   const q = count(title, "？");
@@ -132,7 +166,7 @@ export function checkOne(title: string, boiler: ReadonlyMap<string, number> = ne
     fails.push({ rule: "question_marks", message: `${q} full-width question marks (？), limit ${MAX_QUESTION_MARKS}.` });
   }
 
-  const tail = tailOf(title);
+  const tail = tailOf(title, o);
   if (tail && boiler.has(tail)) {
     fails.push({
       rule: "boilerplate_tail",
@@ -143,7 +177,7 @@ export function checkOne(title: string, boiler: ReadonlyMap<string, number> = ne
   // The keyword zone is everything before the first ？：、or ，.
   const m = KEYWORD_ZONE_END.exec(title);
   const head = m ? title.slice(0, m.index) : title;
-  const hw = px(head);
+  const hw = px(head, o);
   if (hw > FIRST_LINE) {
     warns.push({
       rule: "keyword_zone",
@@ -193,17 +227,17 @@ export interface Report {
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
 /** Check a set of titles together, so boilerplate tails across the set are detected. */
-export function measureTitles(items: readonly TitleInput[]): Report {
-  const boiler = boilerplateTails(items.map((i) => i.title));
+export function measureTitles(items: readonly TitleInput[], o: RuleOptions = DEFAULT_RULES): Report {
+  const boiler = boilerplateTails(items.map((i) => i.title), o);
   let failed = 0;
   const results = items.map(({ src, title }) => {
-    const w = px(title);
-    const v = checkOne(title, boiler);
+    const w = px(title, o);
+    const v = checkOne(title, boiler, o);
     if (v.fails.length) failed++;
     return {
       src, title,
       px: round1(w),
-      full_width_units: round1(units(title)),
+      full_width_units: round1(units(title, o)),
       tier: tier(w),
       fails: v.fails,
       warns: v.warns,

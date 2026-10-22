@@ -29,11 +29,12 @@ expect("tools listed", tools.map((t) => t.name).sort(), ["check_title_files", "m
 
 const SAMPLE = "家常料理食譜站｜滷肉飯做法・便當菜色・120道快速晚餐";
 const CUT = "一二三四五六七八九十百千萬甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午";
-const TAIL = ["番茄炒蛋怎麼做：新手也能做的家常菜", "馬鈴薯燉肉怎麼做：新手也能做的家常菜", "麻婆豆腐怎麼做：新手也能做的家常菜"];
+const TAIL = ["番茄炒蛋怎麼做，新手也能做的家常菜", "馬鈴薯燉肉怎麼做，新手也能做的家常菜", "麻婆豆腐怎麼做，新手也能做的家常菜"];
+const SITE = ["番茄炒蛋怎麼做：家常料理食譜站", "馬鈴薯燉肉怎麼做：家常料理食譜站", "麻婆豆腐怎麼做：家常料理食譜站"];
 
 const r1 = parse(await client.callTool({ name: "measure_titles", arguments: { titles: [SAMPLE, CUT, ...TAIL] } }));
 expect("set with a cut title gets verdict fix", r1.verdict, "fix");
-expect("sample title px", r1.results[0].px, 564.6);
+expect("sample title px", r1.results[0].px, 564.7);
 expect("sample title tier", r1.results[0].tier, "safe");
 expect("sample title has no fails", r1.results[0].fails, []);
 expect("30 distinct ideographs tier", r1.results[1].tier, "cut");
@@ -43,6 +44,9 @@ expect("model date is reported", r1.model.measured_on, "2026-09-18");
 
 const r2 = parse(await client.callTool({ name: "measure_titles", arguments: { titles: [SAMPLE, ...TAIL.slice(0, 2)] } }));
 expect("same tail on 2 titles passes", r2.verdict, "pass");
+
+const r2b = parse(await client.callTool({ name: "measure_titles", arguments: { titles: SITE } }));
+expect("site name after a colon on 3 titles is not boilerplate", [r2b.verdict, r2b.boilerplate_tails], ["pass", []]);
 
 const dir = mkdtempSync(join(tmpdir(), "stw-smoke-"));
 try {

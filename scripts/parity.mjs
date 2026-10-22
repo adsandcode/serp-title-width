@@ -6,17 +6,21 @@
  * The reference is imported by path and must expose px(), tail_of(),
  * check_one() and the EM/SAFE/EDGE/HARD/FIRST_LINE/HALF constants.
  *
- * Compares:
- *   (a) px() of every code point U+0020-U+FFFF except surrogates, reported
- *       separately for printable characters. Differences are grouped into
- *       ranges with the East Asian Width and general category on each side,
- *       because Python's unicodedata and the npm table can be built from
- *       different Unicode versions.
- *   (b) px(), the boilerplate tail, and the ordered list of failed and warned
- *       rules for 200+ mixed titles, with boilerplate detected across the set.
+ * This package deliberately diverges from the reference (full ASCII width
+ * table, zero-width characters and grapheme clusters, no colon tails, separator
+ * tiers). The shipped code can be switched back to the reference's behaviour
+ * with LEGACY_RULES, so the check has two halves:
  *
- * Exit 0 when titles agree exactly and every code-point difference is
- * explained by a Unicode version difference; 1 otherwise; 2 on bad arguments.
+ *   1. LEGACY_RULES against the Python reference, which must agree exactly:
+ *      (a1) px() of every code point U+0020-U+FFFF except surrogates; the only
+ *           allowed differences come from different Unicode data, grouped
+ *           into ranges with the cause;
+ *      (b1) px(), boilerplate tail and the ordered failed/warned rules for
+ *           290 mixed titles, with boilerplate detected across the set.
+ *   2. DEFAULT_RULES against LEGACY_RULES: every difference, for code points
+ *      (a2) and titles (b2), must be attributable to a named cause.
+ *
+ * Exit 0 when both halves hold; 1 otherwise; 2 on bad arguments.
  */
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -25,7 +29,10 @@ import { dirname, resolve } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(here, "..", "dist");
-const { px, tailOf, checkOne, boilerplateTails, EM, SAFE, EDGE, HARD, FIRST_LINE, HALF } =
+const {
+  px, tailOf, checkOne, boilerplateTails, isZeroWidth, EM, SAFE, EDGE, HARD, FIRST_LINE, LEGACY_HALF, ASCII_PX,
+  DEFAULT_RULES, LEGACY_RULES,
+} =
   await import(new URL("file:///" + resolve(dist, "rules.js").replace(/\\/g, "/")).href);
 const { eastAsianWidthType } = await import("get-east-asian-width");
 
@@ -103,6 +110,12 @@ const HANDCRAFTED = [
   // Empty and whitespace edge cases (Python str.isspace() vs JavaScript trim())
   "", " ", cp(0x3000), cp(0xa0), cp(0x1c), cp(0x85), cp(0xfeff), cp(0x200b), "\t\n",
   "結尾換行的標題：這是一段夠長的結尾\n",
+  // Cases for the deliberate divergences from the reference
+  "旗艦手機開箱｜SAMSUNG GALAXY S26 ULTRA VS GOOGLE PIXEL",
+  "番茄炒蛋怎麼做：家常料理食譜站", "馬鈴薯燉肉怎麼做：家常料理食譜站", "麻婆豆腐怎麼做：家常料理食譜站",
+  "台北咖啡廳推薦、甜點、早午餐、插座座位整理",
+  "京都" + cp(0x200b) + "三天兩夜" + cp(0xfeff) + "行程" + cp(0x200b).repeat(5),
+  cp(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467) + " 親子景點" + cp(0x2764, 0xfe0f) + "推薦",
 ];
 
 function mulberry32(seed) {
@@ -201,16 +214,40 @@ if (run.status !== 0) {
 const ref = JSON.parse(String(run.stdout));
 
 // ---------------------------------------------------------------- compare
+// Two comparisons:
+//   1. This package with LEGACY_RULES (switched to the reference's behaviour)
+//      against the Python reference. Must be identical, apart from code points
+//      whose Unicode data differs between the two runtimes.
+//   2. DEFAULT_RULES against LEGACY_RULES. Every difference must come from one
+//      of the deliberate changes listed in CAUSES.
+const CAUSES = [
+  { id: "ascii-width", key: "asciiTable", why: "measured Arial widths for all printable ASCII (the reference had 14, with W wrong)" },
+  { id: "zero-width", key: "graphemes", why: "zero-width characters count 0 and each grapheme cluster counts once" },
+  { id: "colon-tail", key: "colonTail", why: "a phrase after a colon is no longer a boilerplate tail" },
+  { id: "separator-tier", key: "separatorTier", why: "more than 2 separators only warn within the 572px safe line" },
+];
+const flip = (base, key) => Object.freeze({ ...base, [key]: !base[key] });
+
 const report = { python: ref.python, python_unicode: ref.unidata, node_unicode: process.versions.unicode };
 let problems = 0;
 
-// Constants
-const tsConst = { EM, SAFE, EDGE, HARD, FIRST_LINE, HALF: Object.fromEntries(HALF) };
-const constOk = JSON.stringify(tsConst) === JSON.stringify(ref.constants);
+// The reference has had two half-width tables: 14 values (first port), and
+// later the same 95 measured Arial advances as this package. Detect which one
+// it uses, and compare against a baseline with that setting.
+const sameTable = (obj, map) => Object.keys(obj).length === map.size && [...map].every(([k, v]) => obj[k] === v);
+const refAscii = sameTable(ref.constants.HALF, ASCII_PX) ? "full" : sameTable(ref.constants.HALF, LEGACY_HALF) ? "legacy" : "unknown";
+const BASE = Object.freeze({ ...LEGACY_RULES, asciiTable: refAscii === "full" });
+const ACTIVE = CAUSES.filter((c) => BASE[c.key] !== DEFAULT_RULES[c.key]);
+report.reference_ascii_table = refAscii;
+
+// Constants of the reference against this package
+const tsConst = { EM, SAFE, EDGE, HARD, FIRST_LINE };
+const refConst = { EM: ref.constants.EM, SAFE: ref.constants.SAFE, EDGE: ref.constants.EDGE, HARD: ref.constants.HARD, FIRST_LINE: ref.constants.FIRST_LINE };
+const constOk = JSON.stringify(tsConst) === JSON.stringify(refConst) && refAscii !== "unknown";
 if (!constOk) problems++;
 report.constants_identical = constOk;
 
-// (a) Code points
+// (a1) Code points: legacy mode against Python
 const TS_TYPE = { wide: "W", fullwidth: "F", halfwidth: "H", narrow: "Na", ambiguous: "A", neutral: "N" };
 const jsPrintable = (c) => c === 0x20 || !/[\p{C}\p{Z}]/u.test(cp(c));
 const diffs = [];
@@ -219,7 +256,7 @@ for (let i = 0; i < ref.cps.length; i++) {
   const c = ref.cps[i];
   const printable = ref.cp_printable[i] || jsPrintable(c);
   if (printable) printableTotal++;
-  const t = px(cp(c));
+  const t = px(cp(c), BASE);
   if (t !== ref.cp_px[i]) {
     if (printable) printableDiff++;
     diffs.push({
@@ -229,13 +266,6 @@ for (let i = 0; i < ref.cps.length; i++) {
   }
 }
 const hex = (n) => "U+" + n.toString(16).toUpperCase().padStart(4, "0");
-const ranges = [];
-for (const d of diffs) {
-  const key = [d.py_px, d.ts_px, d.py_eaw, d.ts_eaw, d.py_cat === "Cn", d.node_assigned].join("|");
-  const last = ranges[ranges.length - 1];
-  if (last && last.key === key && last.end === d.cp - 1) { last.end = d.cp; last.count++; }
-  else ranges.push({ key, start: d.cp, end: d.cp, count: 1, d });
-}
 // Every difference must fall into one of three known causes; anything else is a bug.
 function explain(d) {
   if (d.py_cat === "Cn" && !d.node_assigned)
@@ -246,11 +276,19 @@ function explain(d) {
     return { kind: "changed", text: `East Asian Width changed after Unicode ${ref.unidata}: ${d.py_eaw} there, ${d.ts_eaw} in the npm table` };
   return { kind: "unexplained", text: "same East Asian Width on both sides but different px: implementation bug" };
 }
-report.codepoints = {
+const ranges = [];
+for (const d of diffs) {
+  const key = [d.py_px, d.ts_px, d.py_eaw, d.ts_eaw, d.py_cat === "Cn", d.node_assigned].join("|");
+  const last = ranges[ranges.length - 1];
+  if (last && last.key === key && last.end === d.cp - 1) { last.end = d.cp; last.count++; }
+  else ranges.push({ key, start: d.cp, end: d.cp, count: 1, d });
+}
+const tally = (xs, f) => xs.reduce((acc, x) => { const k = f(x); acc[k] = (acc[k] ?? 0) + 1; return acc; }, {});
+report.codepoints_legacy_vs_python = {
   compared: ref.cps.length, printable: printableTotal,
   differ_total: diffs.length, differ_printable: printableDiff,
-  by_cause: diffs.reduce((acc, d) => { const k = explain(d).kind; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {}),
-  printable_by_cause: diffs.filter((d) => d.printable).reduce((acc, d) => { const k = explain(d).kind; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {}),
+  by_cause: tally(diffs, (d) => explain(d).kind),
+  printable_by_cause: tally(diffs.filter((d) => d.printable), (d) => explain(d).kind),
   unexplained: diffs.filter((d) => explain(d).kind === "unexplained").length,
   ranges: ranges.map((r) => ({
     range: r.start === r.end ? hex(r.start) : `${hex(r.start)}-${hex(r.end)}`, count: r.count,
@@ -258,29 +296,47 @@ report.codepoints = {
     assigned_in_node_unicode: r.d.node_assigned,
   })),
 };
-if (report.codepoints.unexplained) problems++;
+if (report.codepoints_legacy_vs_python.unexplained) problems++;
 
-// (b) Titles
-const boiler = boilerplateTails(TITLES);
-const boilerOk = JSON.stringify([...boiler.keys()].sort()) === JSON.stringify(ref.boiler);
-if (!boilerOk) problems++;
+// (a2) Code points: default against legacy
+const cpDiv = [];
+for (const c of ref.cps) {
+  const d = px(cp(c), DEFAULT_RULES), l = px(cp(c), BASE);
+  if (d === l) continue;
+  const cause = c >= 0x20 && c <= 0x7e && !BASE.asciiTable ? "ascii-width" : isZeroWidth(c) ? "zero-width" : "unexplained";
+  cpDiv.push({ cp: hex(c), legacy: l, now: d, cause });
+}
+report.codepoints_default_vs_legacy = {
+  differ: cpDiv.length, by_cause: tally(cpDiv, (d) => d.cause),
+  unexplained: cpDiv.filter((d) => d.cause === "unexplained").length,
+  samples: cpDiv.filter((d) => ["U+0057", "U+0030", "U+0020", "U+200B", "U+FE0F"].includes(d.cp)),
+};
+if (report.codepoints_default_vs_legacy.unexplained) problems++;
+
+// (b1) Titles: legacy mode against Python
 const ids = (xs) => xs.map((x) => x.rule);
+const evalSet = (o) => {
+  const b = boilerplateTails(TITLES, o);
+  return TITLES.map((t) => { const v = checkOne(t, b, o); return { px: px(t, o), tail: tailOf(t, o), fails: ids(v.fails), warns: ids(v.warns) }; });
+};
+const L = evalSet(BASE);
+const boilerOk = JSON.stringify([...boilerplateTails(TITLES, BASE).keys()].sort()) === JSON.stringify(ref.boiler);
+if (!boilerOk) problems++;
 let pxMismatch = 0, verdictMismatch = 0, tailMismatch = 0;
 const mismatches = [];
 const ruleHits = {};
 for (let i = 0; i < TITLES.length; i++) {
-  const t = TITLES[i], r = ref.titles[i], v = checkOne(t, boiler);
+  const r = ref.titles[i], l = L[i];
   for (const id of [...r.fails, ...r.warns]) ruleHits[id] = (ruleHits[id] ?? 0) + 1;
-  const pOk = px(t) === r.px;
-  const tOk = (tailOf(t) ?? null) === r.tail;
-  const vOk = JSON.stringify(ids(v.fails)) === JSON.stringify(r.fails) && JSON.stringify(ids(v.warns)) === JSON.stringify(r.warns);
+  const pOk = l.px === r.px, tOk = (l.tail ?? null) === r.tail;
+  const vOk = JSON.stringify([l.fails, l.warns]) === JSON.stringify([r.fails, r.warns]);
   if (!pOk) pxMismatch++;
   if (!tOk) tailMismatch++;
   if (!vOk) verdictMismatch++;
-  if (!pOk || !tOk || !vOk) mismatches.push({ title: t, ts: { px: px(t), fails: ids(v.fails), warns: ids(v.warns) }, py: r });
+  if (!pOk || !tOk || !vOk) mismatches.push({ title: TITLES[i], ts_legacy: l, py: r });
 }
 problems += pxMismatch + verdictMismatch + tailMismatch;
-report.titles = {
+report.titles_legacy_vs_python = {
   compared: TITLES.length, handcrafted: HANDCRAFTED.length, generated: GENERATED.length,
   px_mismatches: pxMismatch, tail_mismatches: tailMismatch, verdict_mismatches: verdictMismatch,
   boilerplate_sets_identical: boilerOk, boilerplate_tails: ref.boiler,
@@ -288,21 +344,67 @@ report.titles = {
   rule_hits_in_python: ruleHits, mismatches: mismatches.slice(0, 20),
 };
 
+// (b2) Titles: default against legacy, attributed to causes. A cause touches a
+// title when switching it on alone (from legacy) or off alone (from default)
+// changes that title's result.
+const D = evalSet(DEFAULT_RULES);
+const S = Object.fromEntries(ACTIVE.map((c) => [c.id, evalSet(flip(BASE, c.key))]));
+const O = Object.fromEntries(ACTIVE.map((c) => [c.id, evalSet(flip(DEFAULT_RULES, c.key))]));
+const all = (r) => JSON.stringify(r);
+const verdict = (r) => JSON.stringify([r.fails, r.warns]);
+const status = (r) => (r.fails.length ? "fail" : "pass");
+const div = { results_differ: 0, verdicts_differ: 0, pass_fail_flips: 0, unexplained: 0,
+  by_cause: {}, verdict_by_cause: {}, flips_by_cause: {}, examples: {} };
+for (let i = 0; i < TITLES.length; i++) {
+  if (all(D[i]) === all(L[i])) continue;
+  div.results_differ++;
+  const vd = verdict(D[i]) !== verdict(L[i]);
+  const fl = status(D[i]) !== status(L[i]);
+  if (vd) div.verdicts_differ++;
+  if (fl) div.pass_fail_flips++;
+  const touched = ACTIVE.filter((c) => all(S[c.id][i]) !== all(L[i]) || all(O[c.id][i]) !== all(D[i]));
+  if (!touched.length) { div.unexplained++; continue; }
+  for (const c of touched) {
+    div.by_cause[c.id] = (div.by_cause[c.id] ?? 0) + 1;
+    const cv = verdict(S[c.id][i]) !== verdict(L[i]) || verdict(O[c.id][i]) !== verdict(D[i]);
+    if (vd && cv) {
+      div.verdict_by_cause[c.id] = (div.verdict_by_cause[c.id] ?? 0) + 1;
+      (div.examples[c.id] ??= []).length < 2 && div.examples[c.id].push({
+        title: TITLES[i], before: { px: +L[i].px.toFixed(1), fails: L[i].fails, warns: L[i].warns },
+        after: { px: +D[i].px.toFixed(1), fails: D[i].fails, warns: D[i].warns },
+      });
+    }
+    if (fl && cv) div.flips_by_cause[c.id] = (div.flips_by_cause[c.id] ?? 0) + 1;
+  }
+}
+problems += div.unexplained;
+report.titles_default_vs_legacy = div;
+
 if (JSON_OUT) writeFileSync(JSON_OUT, JSON.stringify(report, null, 2));
 
 console.log(`reference: Python ${ref.python}, unicodedata ${ref.unidata}; Node ${process.version}, ICU Unicode ${process.versions.unicode}`);
-console.log(`constants identical: ${constOk}`);
-const c = report.codepoints;
-console.log(`(a) code points U+0020-U+FFFF without surrogates: ${c.compared} compared, ${c.printable} printable`);
-console.log(`    px differs on ${c.differ_total} code points (${c.differ_printable} printable), in ${c.ranges.length} ranges; unexplained: ${c.unexplained}`);
-console.log(`    by cause (all): ${JSON.stringify(c.by_cause)}; printable only: ${JSON.stringify(c.printable_by_cause)}`);
+console.log(`constants identical: ${constOk}; reference half-width table: ${refAscii === "full" ? "the same 95 measured Arial advances as this package" : refAscii === "legacy" ? "the old 14-value table" : "UNKNOWN"}`);
+console.log(`baseline = this package switched to the reference's behaviour: ${JSON.stringify(BASE)}`);
+const c = report.codepoints_legacy_vs_python;
+console.log(`(a1) code points U+0020-U+FFFF without surrogates, baseline vs Python: ${c.compared} compared, ${c.printable} printable`);
+console.log(`     px differs on ${c.differ_total} (${c.differ_printable} printable), ${c.ranges.length} ranges; unexplained: ${c.unexplained}`);
+console.log(`     by cause (all): ${JSON.stringify(c.by_cause)}; printable only: ${JSON.stringify(c.printable_by_cause)}`);
 const VERBOSE = process.argv.includes("--verbose");
-for (const r of c.ranges) if (VERBOSE || r.kind !== "unassigned") console.log(`      ${r.range.padEnd(14)} x${String(r.count).padEnd(5)} py ${r.python_px} / ts ${r.ts_px}  ${r.cause}`);
-if (!VERBOSE) console.log(`      (${c.ranges.filter((r) => r.kind === "unassigned").length} ranges of unassigned code points not listed; --verbose lists them, --json saves all)`);
-const t = report.titles;
-console.log(`(b) titles: ${t.compared} compared (${t.handcrafted} handcrafted, ${t.generated} generated)`);
-console.log(`    px mismatches ${t.px_mismatches}, tail mismatches ${t.tail_mismatches}, verdict mismatches ${t.verdict_mismatches}, boilerplate sets identical ${t.boilerplate_sets_identical}`);
-console.log(`    titles failing in Python: ${t.titles_failing_in_python}; rule hits: ${JSON.stringify(t.rule_hits_in_python)}`);
-for (const m of t.mismatches) console.log("    MISMATCH " + JSON.stringify(m));
-console.log(problems ? `\nPARITY FAILED (${problems} problem(s))` : "\nparity OK");
+for (const r of c.ranges) if (VERBOSE || r.kind !== "unassigned") console.log(`       ${r.range.padEnd(14)} x${String(r.count).padEnd(5)} py ${r.python_px} / ts ${r.ts_px}  ${r.cause}`);
+if (!VERBOSE) console.log(`       (${c.ranges.filter((r) => r.kind === "unassigned").length} ranges of unassigned code points not listed; --verbose lists them, --json saves all)`);
+const cd = report.codepoints_default_vs_legacy;
+console.log(`(a2) code points, DEFAULT vs baseline: ${cd.differ} differ, by cause ${JSON.stringify(cd.by_cause)}, unexplained: ${cd.unexplained}`);
+for (const s of cd.samples) console.log(`       ${s.cp.padEnd(8)} legacy ${s.legacy} -> now ${s.now} (${s.cause})`);
+const t = report.titles_legacy_vs_python;
+console.log(`(b1) titles, baseline vs Python: ${t.compared} compared (${t.handcrafted} handcrafted, ${t.generated} generated)`);
+console.log(`     px mismatches ${t.px_mismatches}, tail mismatches ${t.tail_mismatches}, verdict mismatches ${t.verdict_mismatches}, boilerplate sets identical ${t.boilerplate_sets_identical}`);
+console.log(`     titles failing in Python: ${t.titles_failing_in_python}; rule hits: ${JSON.stringify(t.rule_hits_in_python)}`);
+for (const m of t.mismatches) console.log("     MISMATCH " + JSON.stringify(m));
+console.log(`(b2) titles, DEFAULT vs baseline: ${div.results_differ} results differ, ${div.verdicts_differ} verdicts differ, ${div.pass_fail_flips} flip between pass and fail; unexplained: ${div.unexplained}`);
+for (const cz of CAUSES) {
+  if (!ACTIVE.includes(cz)) { console.log(`     ${cz.id.padEnd(15)} not a divergence: the reference already does this`); continue; }
+  console.log(`     ${cz.id.padEnd(15)} touches ${String(div.by_cause[cz.id] ?? 0).padStart(3)} results, ${String(div.verdict_by_cause[cz.id] ?? 0).padStart(3)} verdicts, ${String(div.flips_by_cause[cz.id] ?? 0).padStart(3)} pass/fail flips  (${cz.why})`);
+  for (const e of div.examples[cz.id] ?? []) console.log(`       e.g. ${e.title}\n            before ${JSON.stringify(e.before)}\n            after  ${JSON.stringify(e.after)}`);
+}
+console.log(problems ? `\nPARITY FAILED (${problems} problem(s))` : "\nparity OK: the baseline matches the reference, and every divergence has a named cause");
 process.exit(problems ? 1 : 0);

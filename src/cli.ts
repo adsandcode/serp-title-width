@@ -13,14 +13,13 @@
  * The selftest runs before every verdict. If it fails, no verdict is given.
  */
 
-import { basename } from "node:path";
-
 import { measureTitles, EDGE, HARD, SAFE, MODEL, type Report, type TitleInput } from "./rules.js";
-import { collectTitles } from "./files.js";
+import { collectTitles, MAX_FILES } from "./files.js";
 import { run as runSelftest } from "./selftest.js";
 
 const USAGE = `Usage:
-  serp-title-width <file|dir> ...           check <title> in .html/.htm files (directories are recursive)
+  serp-title-width <file|dir> ...           check <title> in .html/.htm files (directories are recursive,
+                                            skipping node_modules and dot folders, at most ${MAX_FILES} files)
   serp-title-width --titles "t1" "t2" ...   check title strings
   serp-title-width ... --json               machine-readable output
   serp-title-width --selftest               run the ruler's positive and negative controls (use alone)
@@ -72,9 +71,19 @@ export function main(argv: string[], out: Out, err: Out): number {
       err(USAGE);
       return 2;
     }
-    ({ items, missing, skipped } = collectTitles(args));
+    const found = collectTitles(args);
+    ({ items, missing, skipped } = found);
+    if (found.tooMany) {
+      err(`More than ${found.tooMany.limit} HTML files under ${found.tooMany.path}. ` +
+        "Point at a site's build output folder instead.");
+      return 2;
+    }
     if (missing.length) {
       err(`Path not found: ${missing.join(", ")}`);
+      return 2;
+    }
+    if (found.unreadable.length) {
+      err("Cannot read: " + found.unreadable.map((u) => `${u.path} (${u.reason})`).join(", "));
       return 2;
     }
     if (!items.length) {
@@ -108,9 +117,8 @@ function printHuman(r: Report, skipped: { path: string; reason: string }[], show
   out(rule);
   for (const x of [...r.results].sort((a, b) => b.px - a.px)) {
     if (!showAll && !x.fails.length && !x.warns.length) continue;
-    const label = x.src.startsWith("(") ? x.src : basename(x.src);
     const status = x.fails.length ? "FAIL" : x.warns.length ? "warn" : "ok";
-    out(`[${status}] ${label}`);
+    out(`[${status}] ${x.src}`);
     out(`   ${x.title}`);
     out(`   ${x.px.toFixed(1)}px / ${x.full_width_units.toFixed(1)} full-width characters / ${x.tier}`);
     for (const f of x.fails) out(`   [FAIL] ${f.message}`);
