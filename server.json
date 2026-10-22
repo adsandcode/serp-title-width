@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.adsandcode/serp-title-width",
+  "title": "SERP Title Width",
+  "description": "Check if Chinese, Japanese and Korean page titles fit Google results by pixel width, not char count",
+  "repository": {
+    "url": "https://github.com/adsandcode/serp-title-width",
+    "source": "github"
+  },
+  "websiteUrl": "https://adsandcode.com/en/open-source/serp-title-width/",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "mcp-server-serp-title-width",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.tgz
+.DS_Store
+__pycache__/
+
+# Private tooling and reports: the leak scanner carries its own secret list,
+# and parity reports come from a reference implementation that is not public.
+.private/

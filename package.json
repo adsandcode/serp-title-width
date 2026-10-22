@@ -1,0 +1,65 @@
+{
+  "name": "mcp-server-serp-title-width",
+  "version": "0.1.0",
+  "mcpName": "io.github.adsandcode/serp-title-width",
+  "description": "Check whether Chinese, Japanese and Korean page titles fit in Google search results by rendered pixel width, not character count. MCP server and CLI.",
+  "keywords": [
+    "seo",
+    "serp",
+    "title-tag",
+    "pixel-width",
+    "cjk",
+    "chinese",
+    "traditional-chinese",
+    "japanese",
+    "korean",
+    "google",
+    "truncation",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "ci"
+  ],
+  "license": "MIT",
+  "homepage": "https://adsandcode.com/en/open-source/serp-title-width/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adsandcode/serp-title-width.git"
+  },
+  "bugs": {
+    "url": "https://github.com/adsandcode/serp-title-width/issues"
+  },
+  "author": "Ads & Code (https://adsandcode.com)",
+  "type": "module",
+  "main": "dist/width.js",
+  "types": "dist/width.d.ts",
+  "bin": {
+    "mcp-server-serp-title-width": "dist/index.js",
+    "serp-title-width": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "selftest": "node dist/selftest.js",
+    "smoke": "node scripts/smoke.mjs",
+    "test:cli": "node scripts/cli-exit-codes.mjs",
+    "prepublishOnly": "npm run build && npm run selftest && node scripts/smoke.mjs && node scripts/cli-exit-codes.mjs && node scripts/check-publish-ready.mjs",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "get-east-asian-width": "^1.7.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "typescript": "^5.6.3"
+  }
+}

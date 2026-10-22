@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node-version: ["18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm ci
+      - run: npm run build
+      # Positive and negative controls for the ruler. Exit 2 means the model is broken.
+      - run: npm run selftest
+      # Talk to the built server over stdio like a real MCP client.
+      - run: node scripts/smoke.mjs
+      # Run the CLI as a separate process and check exit codes 0 / 1 / 2.
+      - run: node scripts/cli-exit-codes.mjs
+      - run: node scripts/check-publish-ready.mjs
